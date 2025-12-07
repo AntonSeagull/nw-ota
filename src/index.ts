@@ -134,18 +134,18 @@ export interface BundleUpdaterOptions {
     /**
      * Path to the bundle directory to replace.
      * 
+     * If not provided, will be automatically detected using BundleUpdater.getDefaultBundlePath().
+     * 
      * For NW.js apps, bundle location is platform-specific:
      * - Windows/Linux: same folder as nw.exe, or package.nw folder
      * - Mac: nwjs.app/Contents/Resources/app.nw
-     * 
-     * Use BundleUpdater.getDefaultBundlePath() to automatically detect the correct path.
      * 
      * Examples:
      * - "./app" - relative path
      * - "./package.nw" - package.nw folder
      * - "/path/to/app" - absolute path
      */
-    bundlePath: string;
+    bundlePath?: string;
     temporaryDirectory?: string;
     backup?: boolean;
     /**
@@ -163,13 +163,19 @@ export default class BundleUpdater {
     private dev: boolean;
 
     constructor(options: BundleUpdaterOptions) {
-        if (!options.bundlePath) {
-            throw new Error('bundlePath is required');
-        }
-
         const path = require("path");
 
-        this.bundlePath = path.resolve(options.bundlePath);
+        // If bundlePath is not provided, try to auto-detect it
+        if (!options.bundlePath) {
+            const defaultPath = BundleUpdater.getDefaultBundlePath();
+            if (!defaultPath) {
+                throw new Error('bundlePath is required. Could not auto-detect bundle path. Please provide bundlePath manually.');
+            }
+            this.bundlePath = defaultPath;
+        } else {
+            this.bundlePath = path.resolve(options.bundlePath);
+        }
+
         this.temporaryDirectory = options.temporaryDirectory || os.tmpdir();
         this.backup = options.backup !== false;
         this.dev = options.dev === true;

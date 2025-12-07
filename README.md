@@ -1,5 +1,7 @@
 # nw-ota
 
+[English](README.md) | [Русский](README_RU.md)
+
 Update NW.js application bundle (app files) without replacing the entire application.
 
 This library allows you to update only the application bundle (e.g., `app/` folder) of your NW.js application, while keeping the NW.js runtime and other files intact.
@@ -18,10 +20,8 @@ npm install nw-ota
 import BundleUpdater from "nw-ota";
 
 // Option 1: Auto-detect bundle path (recommended for NW.js apps)
-const defaultPath = BundleUpdater.getDefaultBundlePath();
-const updater = new BundleUpdater({
-  bundlePath: defaultPath || "./app", // Auto-detect or fallback
-});
+// bundlePath will be automatically detected using getDefaultBundlePath()
+const updater = new BundleUpdater({});
 
 // Option 2: Manual path
 // const updater = new BundleUpdater({
@@ -44,11 +44,8 @@ The library can automatically check for updates from S3 and install them. This w
 ```typescript
 import BundleUpdater from "nw-ota";
 
-// Auto-detect bundle path based on platform
-const defaultPath = BundleUpdater.getDefaultBundlePath();
-const updater = new BundleUpdater({
-  bundlePath: defaultPath || "./app",
-});
+// Auto-detect bundle path based on platform (bundlePath is optional)
+const updater = new BundleUpdater({});
 
 // Check for updates and install automatically
 await updater.checkForUpdate({
@@ -78,9 +75,15 @@ await updater.checkForUpdate({
     console.log("No updates available");
   },
 
-  // Optional: restart app after update
-  restartAfterInstall: true,
-  restartDelay: 300, // milliseconds
+  // Optional: notify that restart is needed
+  onNeedRestart: () => {
+    console.log("Update installed! Please restart the app to apply changes.");
+  },
+
+  // Optional: track status changes
+  onStatus: (status) => {
+    console.log("Update status:", status);
+  },
 });
 ```
 
@@ -219,19 +222,22 @@ Creates a new instance of BundleUpdater.
 
 **Options:**
 
-- `bundlePath` (required): Path to the bundle directory to replace.
+- `bundlePath` (optional): Path to the bundle directory to replace. If not provided, will be automatically detected using `BundleUpdater.getDefaultBundlePath()`.
 
   **Important:** In NW.js apps, bundle location is **platform-specific** according to [NW.js documentation](https://docs.nwjs.io/For%20Users/Package%20and%20Distribute/):
 
   - **Windows/Linux**: Same folder as `nw.exe` (or `nw`), OR `package.nw` folder in the same directory
   - **Mac**: `nwjs.app/Contents/Resources/app.nw`
 
-  You can use `BundleUpdater.getDefaultBundlePath()` to automatically detect the correct path:
+  If `bundlePath` is not provided, the library will automatically detect it:
 
   ```typescript
-  const defaultPath = BundleUpdater.getDefaultBundlePath();
+  // Auto-detect (recommended for NW.js apps)
+  const updater = new BundleUpdater({});
+
+  // Or provide manually
   const updater = new BundleUpdater({
-    bundlePath: defaultPath || "./app", // fallback if auto-detection fails
+    bundlePath: "./app",
   });
   ```
 
@@ -342,6 +348,7 @@ Checks for updates from S3 storage and installs them automatically. Works in NW.
 **Parameters:**
 
 - `options` (CheckUpdateOptions): Configuration object
+
   - `endpoint` (string, required): S3 endpoint/base URL where updates are stored
   - `projectKey` (string, required): Unique project identifier
   - `currentVersion` (number, optional): Current bundle version. If not provided, will be loaded from saved version file (`.nw-bundle-version.json`). Defaults to 0 if no saved version exists.
@@ -351,8 +358,25 @@ Checks for updates from S3 storage and installs them automatically. Works in NW.
   - `updateSuccess` (function, optional): Callback when update succeeds `() => void`
   - `updateFail` (function, optional): Callback when update fails `(error?: string | Error) => void`
   - `noUpdate` (function, optional): Callback when no update is available `() => void`
-  - `restartAfterInstall` (boolean, optional): Whether to restart app after update (default: false)
-  - `restartDelay` (number, optional): Delay before restart in milliseconds (default: 300)
+  - `onNeedRestart` (function, optional): Callback triggered after update is successfully installed. The app will not restart automatically - user must restart manually to apply the update `() => void`
+  - `onStatus` (function, optional): Callback triggered on every status change during the update process. Provides unified status tracking `(status: UpdateStatus) => void`
+
+**UpdateStatus values:**
+
+- `'checking'` - Checking for available updates
+- `'update-found'` - Update has been found and will be installed
+- `'downloading'` - Downloading the update package
+- `'downloaded'` - Download completed successfully
+- `'unpacking'` - Unpacking the downloaded archive
+- `'unpacked'` - Unpacking completed successfully
+- `'replacing'` - Replacing the current bundle with the new one
+- `'replaced'` - Bundle replacement completed successfully
+- `'saving'` - Saving the new version information
+- `'cleaning'` - Cleaning up temporary files
+- `'success'` - Update installation completed successfully
+- `'error'` - An error occurred during the update process
+- `'no-update'` - No updates available
+- `'restart-needed'` - Update installed, application restart is required
 
 **Returns:** `Promise<void>`
 
@@ -369,7 +393,9 @@ await updater.checkForUpdate({
   updateSuccess: () => {
     console.log("Update installed! Version saved automatically.");
   },
-  restartAfterInstall: true,
+  onNeedRestart: () => {
+    console.log("Please restart the app to apply the update.");
+  },
 });
 
 // Get current version
