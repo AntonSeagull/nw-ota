@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.DS_Store
+*.backup.*
+temp/
+tmp/
+dist/
+build/
+*.zip
+.nw-ota-config.json
+.nw-bundle-version.json
+nw-updater-main

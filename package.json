@@ -1,0 +1,50 @@
+{
+    "name": "nw-ota",
+    "version": "1.0.0",
+    "description": "Update NW.js application bundle (app files) without replacing the entire application",
+    "type": "module",
+    "main": "dist/index.js",
+    "types": "dist/index.d.ts",
+    "bin": {
+        "nw-ota": "./dist/cli.js"
+    },
+    "keywords": [
+        "NW.js",
+        "node-webkit",
+        "bundle",
+        "update",
+        "ota"
+    ],
+    "author": "",
+    "license": "MIT",
+    "files": [
+        "dist/**/*",
+        "README.md",
+        "LICENSE"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "prepublishOnly": "npm run build",
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "@aws-sdk/client-s3": "^3.490.0",
+        "axios": "^1.7.2",
+        "inquirer": "^9.2.12",
+        "ncp": "^2.0.0",
+        "yauzl": "^2.10.0",
+        "yazl": "^2.5.1"
+    },
+    "devDependencies": {
+        "@types/inquirer": "^9.0.7",
+        "@types/ncp": "^2.0.7",
+        "@types/node": "^20.10.6",
+        "@types/nw.js": "^0.92.0",
+        "@types/yauzl": "^2.10.3",
+        "@types/yazl": "^3.3.0",
+        "typescript": "^5.3.3"
+    },
+    "engines": {
+        "node": ">=14.0.0"
+    }
+}

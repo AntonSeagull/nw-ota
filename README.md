@@ -1,0 +1,412 @@
+# nw-ota
+
+Update NW.js application bundle (app files) without replacing the entire application.
+
+This library allows you to update only the application bundle (e.g., `app/` folder) of your NW.js application, while keeping the NW.js runtime and other files intact.
+
+## Installation
+
+```bash
+npm install nw-ota
+```
+
+## Usage
+
+### Basic Example - Updating Bundle
+
+```typescript
+import BundleUpdater from "nw-ota";
+
+// Option 1: Auto-detect bundle path (recommended for NW.js apps)
+const defaultPath = BundleUpdater.getDefaultBundlePath();
+const updater = new BundleUpdater({
+  bundlePath: defaultPath || "./app", // Auto-detect or fallback
+});
+
+// Option 2: Manual path
+// const updater = new BundleUpdater({
+//   bundlePath: "./app", // Path to your app bundle directory
+// });
+
+// Update bundle from URL
+try {
+  await updater.update("https://example.com/updates/app-bundle.zip");
+  console.log("Bundle updated successfully!");
+} catch (error) {
+  console.error("Update failed:", error);
+}
+```
+
+### Automatic Update Check (NW.js Context)
+
+The library can automatically check for updates from S3 and install them. This works in NW.js context and automatically detects platform and application version:
+
+```typescript
+import BundleUpdater from "nw-ota";
+
+// Auto-detect bundle path based on platform
+const defaultPath = BundleUpdater.getDefaultBundlePath();
+const updater = new BundleUpdater({
+  bundlePath: defaultPath || "./app",
+});
+
+// Check for updates and install automatically
+await updater.checkForUpdate({
+  endpoint: "https://bucket.s3.region.amazonaws.com",
+  projectKey: "my-project",
+  // currentVersion is optional - if not provided, will load from saved version file
+  // After successful update, version is automatically saved
+
+  // Callbacks
+  progress: (received, total) => {
+    console.log(`Download progress: ${received}/${total} bytes`);
+  },
+
+  updateFound: (update) => {
+    console.log(`Update found: version ${update.version}`);
+  },
+
+  updateSuccess: () => {
+    console.log("Update installed successfully!");
+  },
+
+  updateFail: (error) => {
+    console.error("Update failed:", error);
+  },
+
+  noUpdate: () => {
+    console.log("No updates available");
+  },
+
+  // Optional: restart app after update
+  restartAfterInstall: true,
+  restartDelay: 300, // milliseconds
+});
+```
+
+The function automatically:
+
+- Detects platform (win/mac/linux32/linux64) from NW.js
+- Gets **application version** (e.g., "1.0.0") from `nw.App.manifest.version` - this is the version from your package.json/manifest
+- Loads current bundle version from local file (`.nw-bundle-version.json`) if `currentVersion` is not provided
+- Builds update.json URL: `{endpoint}/ota/nwjs/{projectKey}/{platform}/{appVersion}/update.json`
+- Finds the latest enabled update with version > currentVersion
+- Downloads and installs the update
+- **Saves the new version automatically** after successful installation
+
+**Note:** The `appVersion` in the URL path refers to the application version from `nw.App.manifest.version` (like "1.0.0", "1.2.3"). This allows you to have separate update channels for different application versions.
+
+### Step-by-step Update
+
+```typescript
+import BundleUpdater from "nw-ota";
+
+const updater = new BundleUpdater({
+  bundlePath: "./app",
+  temporaryDirectory: "./temp",
+  backup: true, // Create backup before replacing (default: true)
+});
+
+try {
+  // 1. Download the zip file
+  const zipPath = await updater.download(
+    "https://example.com/updates/app-bundle.zip"
+  );
+
+  // 2. Unpack the zip file
+  const unpackedPath = await updater.unpack(zipPath);
+
+  // 3. Replace the bundle
+  await updater.replace(unpackedPath);
+
+  console.log("Bundle updated successfully!");
+} catch (error) {
+  console.error("Update failed:", error);
+}
+```
+
+## Publishing Updates (CLI)
+
+The package includes a CLI tool for publishing updates to S3 storage.
+
+### Installation
+
+```bash
+npm install -g nw-ota
+```
+
+Or use with npx:
+
+```bash
+npx nw-ota
+```
+
+### Usage
+
+Run the publish command in your project directory:
+
+```bash
+npx nw-ota-publish
+```
+
+Or:
+
+```bash
+npx nw-ota
+```
+
+The CLI will guide you through the process:
+
+1. **Build Path**: Enter the path to your build directory (saved for future use)
+2. **Project Key**: Enter a unique project identifier (saved for future use)
+3. **Platform**: Select platform (win, mac, linux32, linux64)
+4. **Version**: Enter the application version (e.g., "1.0.0") - this should match the version from your package.json/manifest (saved per platform)
+5. **S3 Configuration**: Enter S3 credentials and settings (saved for future use)
+6. **Upload**: The tool will:
+   - Create a zip archive from your build directory
+   - Upload it to S3 at: `/ota/nwjs/{projectKey}/{platform}/{version}/update-v{X}.zip`
+   - Update or create `update.json` with the new version
+
+**Note:** The version should match the application version from your package.json/manifest (e.g., "1.0.0", "1.2.3"). This allows you to have separate update channels for different application versions.
+
+### Configuration
+
+The CLI saves configuration in `.nw-ota-config.json` in your project directory. This file contains:
+
+- Build path
+- Project key
+- Platform-specific versions
+- S3 configuration
+
+**Note**: The config file is automatically added to `.gitignore` to prevent committing sensitive S3 credentials.
+
+### S3 Structure
+
+Updates are stored in S3 with the following structure:
+
+```
+ota/nwjs/{projectKey}/{platform}/{version}/
+  ├── update.json
+  ├── update-v1.zip
+  ├── update-v2.zip
+  └── ...
+```
+
+### update.json Format
+
+The `update.json` file contains an array of available updates:
+
+```json
+[
+  {
+    "version": 1,
+    "enable": true,
+    "download": "https://bucket.s3.region.amazonaws.com/ota/nwjs/project/win/1.0.0/update-v1.zip"
+  },
+  {
+    "version": 2,
+    "enable": true,
+    "download": "https://bucket.s3.region.amazonaws.com/ota/nwjs/project/win/1.0.0/update-v2.zip"
+  }
+]
+```
+
+## API
+
+### `new BundleUpdater(options)`
+
+Creates a new instance of BundleUpdater.
+
+**Options:**
+
+- `bundlePath` (required): Path to the bundle directory to replace.
+
+  **Important:** In NW.js apps, bundle location is **platform-specific** according to [NW.js documentation](https://docs.nwjs.io/For%20Users/Package%20and%20Distribute/):
+
+  - **Windows/Linux**: Same folder as `nw.exe` (or `nw`), OR `package.nw` folder in the same directory
+  - **Mac**: `nwjs.app/Contents/Resources/app.nw`
+
+  You can use `BundleUpdater.getDefaultBundlePath()` to automatically detect the correct path:
+
+  ```typescript
+  const defaultPath = BundleUpdater.getDefaultBundlePath();
+  const updater = new BundleUpdater({
+    bundlePath: defaultPath || "./app", // fallback if auto-detection fails
+  });
+  ```
+
+  Examples:
+
+  - `'./app'` - relative path
+  - `'./package.nw'` - package.nw folder (Windows/Linux)
+  - `'/path/to/app'` - absolute path
+
+- `temporaryDirectory` (optional): Path to temporary directory for downloads. Defaults to `os.tmpdir()`
+- `backup` (optional): Whether to create a backup before replacing. Defaults to `true`
+
+### `BundleUpdater.getDefaultBundlePath()`
+
+Static method that automatically detects the default bundle path based on NW.js platform-specific structure.
+
+**Returns:** `string | null` - The detected bundle path, or `null` if NW.js is not available or path cannot be determined.
+
+**Example:**
+
+```typescript
+const defaultPath = BundleUpdater.getDefaultBundlePath();
+if (defaultPath) {
+  const updater = new BundleUpdater({
+    bundlePath: defaultPath,
+  });
+} else {
+  // Fallback to manual path
+  const updater = new BundleUpdater({
+    bundlePath: "./app",
+  });
+}
+```
+
+### `updater.update(url)`
+
+Downloads, unpacks and replaces the bundle in one call.
+
+**Parameters:**
+
+- `url` (string): URL to download the zip file from
+
+**Returns:** `Promise<void>`
+
+### `updater.download(url)`
+
+Downloads a zip file from URL.
+
+**Parameters:**
+
+- `url` (string): URL to download the zip file from
+
+**Returns:** `Promise<string>` - Path to the downloaded file
+
+### `updater.unpack(zipPath)`
+
+Unpacks a zip file to a temporary directory.
+
+**Parameters:**
+
+- `zipPath` (string): Path to the zip file
+
+**Returns:** `Promise<string>` - Path to the unpacked directory
+
+### `updater.replace(newBundlePath)`
+
+Replaces the current bundle with the new one.
+
+**Parameters:**
+
+- `newBundlePath` (string): Path to the new bundle directory
+
+**Returns:** `Promise<void>`
+
+### `updater.createBackup()`
+
+Creates a backup of the current bundle.
+
+**Returns:** `Promise<string | null>` - Path to the backup directory, or null if bundle doesn't exist
+
+### `updater.getCurrentVersion()`
+
+Gets the current bundle version from the saved version file.
+
+**Returns:** `number` - Current bundle version (0 if no version file exists)
+
+**Note:** The version is automatically saved after successful updates via `checkForUpdate()`. The version file is stored at `.nw-bundle-version.json` next to the bundle directory.
+
+### `updater.getVersionInfo()`
+
+Gets version info string with platform, application version, and OTA bundle version.
+
+**Returns:** `string` - Version info in format: `"Platform Version OTAVersion"`
+
+**Example:**
+
+```typescript
+const versionInfo = updater.getVersionInfo();
+console.log(versionInfo); // "win 1.0.0 5" or "mac 1.2.3 3"
+```
+
+This is the same information that is used when checking for updates (platform, application version, and current OTA version).
+
+### `updater.checkForUpdate(options)`
+
+Checks for updates from S3 storage and installs them automatically. Works in NW.js context - automatically detects platform and application version.
+
+**Parameters:**
+
+- `options` (CheckUpdateOptions): Configuration object
+  - `endpoint` (string, required): S3 endpoint/base URL where updates are stored
+  - `projectKey` (string, required): Unique project identifier
+  - `currentVersion` (number, optional): Current bundle version. If not provided, will be loaded from saved version file (`.nw-bundle-version.json`). Defaults to 0 if no saved version exists.
+  - `headers` (Record<string, string>, optional): Optional headers for requests
+  - `progress` (function, optional): Callback for download progress `(received: number, total: number) => void`
+  - `updateFound` (function, optional): Callback when update is found `(update: UpdateEntry) => void`
+  - `updateSuccess` (function, optional): Callback when update succeeds `() => void`
+  - `updateFail` (function, optional): Callback when update fails `(error?: string | Error) => void`
+  - `noUpdate` (function, optional): Callback when no update is available `() => void`
+  - `restartAfterInstall` (boolean, optional): Whether to restart app after update (default: false)
+  - `restartDelay` (number, optional): Delay before restart in milliseconds (default: 300)
+
+**Returns:** `Promise<void>`
+
+**Example:**
+
+```typescript
+await updater.checkForUpdate({
+  endpoint: "https://bucket.s3.region.amazonaws.com",
+  projectKey: "my-project",
+  // currentVersion will be loaded automatically from saved file
+  progress: (received, total) => {
+    console.log(`Progress: ${((received / total) * 100).toFixed(2)}%`);
+  },
+  updateSuccess: () => {
+    console.log("Update installed! Version saved automatically.");
+  },
+  restartAfterInstall: true,
+});
+
+// Get current version
+const currentVersion = updater.getCurrentVersion();
+console.log(`Current bundle version: ${currentVersion}`);
+```
+
+## Building
+
+To build the TypeScript source:
+
+```bash
+npm run build
+```
+
+This will compile the TypeScript files to JavaScript in the `dist/` directory.
+
+## Differences from nw-updater
+
+- **nw-updater**: Replaces the entire NW.js application (executable, runtime, and all files)
+- **nw-ota**: Replaces only the application bundle (your app code), keeping the NW.js runtime intact
+
+This is useful when:
+
+- You want to update your application code without redistributing the entire NW.js runtime
+- You want smaller update packages
+- You want faster updates (only app files, not the entire application)
+
+## Requirements
+
+- Node.js 14.0.0 or higher
+- TypeScript 5.0+ (for development)
+- For Windows: PowerShell 5.0+ (Windows 10+) or unzip utility
+- For macOS/Linux: unzip utility (usually pre-installed)
+- For publishing: AWS S3 or S3-compatible storage
+- For automatic updates: NW.js application context (for `checkForUpdate` method)
+
+## License
+
+MIT
