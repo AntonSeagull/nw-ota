@@ -3,9 +3,9 @@
 import axios from 'axios';
 
 import {
-  CheckUpdateOptions,
-  Platform,
-  UpdateEntry,
+    CheckUpdateOptions,
+    Platform,
+    UpdateEntry,
 } from './types.js';
 
 // Check if we're in Node.js/NW.js environment
@@ -796,6 +796,7 @@ export default class BundleUpdater {
         return `${platform} ${appVersion} ${otaVersion}`;
     }
 
+
     /**
      * Checks for updates and installs if available
      * Works in NW.js context - automatically detects platform and application version
@@ -836,6 +837,9 @@ export default class BundleUpdater {
                 console.log('  Fetching update.json...');
             }
 
+            // Status: checking
+            options.onStatus?.('checking');
+
             // Download update.json
             let updates: UpdateEntry[] = [];
             try {
@@ -855,12 +859,14 @@ export default class BundleUpdater {
                         console.log('  Update.json not found (404)');
                     }
                     // No update.json found
+                    options.onStatus?.('no-update');
                     options.noUpdate?.();
                     return;
                 }
                 if (dev) {
                     console.error('  Failed to fetch update.json:', error.message);
                 }
+                options.onStatus?.('error');
                 throw new Error(`Failed to fetch update.json: ${error.message}`);
             }
 
@@ -868,6 +874,7 @@ export default class BundleUpdater {
                 if (dev) {
                     console.log('  No updates in update.json');
                 }
+                options.onStatus?.('no-update');
                 options.noUpdate?.();
                 return;
             }
@@ -888,6 +895,7 @@ export default class BundleUpdater {
                 if (dev) {
                     console.log('  No available updates');
                 }
+                options.onStatus?.('no-update');
                 options.noUpdate?.();
                 return;
             }
@@ -900,6 +908,8 @@ export default class BundleUpdater {
                 console.log('  Download URL:', latestUpdate.download);
             }
 
+            // Status: update-found
+            options.onStatus?.('update-found');
             options.updateFound?.(latestUpdate);
 
             const path = require("path");
@@ -912,18 +922,26 @@ export default class BundleUpdater {
                 if (dev) {
                     console.log('  Starting download...');
                 }
+                // Status: downloading
+                options.onStatus?.('downloading');
                 await this._downloadWithProgress(
                     latestUpdate.download,
                     zipPath,
                     options.progress,
                     options.headers
                 );
+                // Status: downloaded
+                options.onStatus?.('downloaded');
 
                 // Unpack
                 if (dev) {
                     console.log('  Starting unpack...');
                 }
+                // Status: unpacking
+                options.onStatus?.('unpacking');
                 const unpackedPath = await this.unpack(zipPath);
+                // Status: unpacked
+                options.onStatus?.('unpacked');
 
                 // Find bundle source
                 const bundleSource = this._findBundleSource(unpackedPath);
@@ -936,18 +954,26 @@ export default class BundleUpdater {
                 if (dev) {
                     console.log('  Replacing bundle...');
                 }
+                // Status: replacing
+                options.onStatus?.('replacing');
                 await this.replace(bundleSource);
+                // Status: replaced
+                options.onStatus?.('replaced');
 
                 // Save the new version
                 if (dev) {
                     console.log('  Saving new version...');
                 }
+                // Status: saving
+                options.onStatus?.('saving');
                 this._saveVersion(latestUpdate.version);
 
                 // Cleanup
                 if (dev) {
                     console.log('  Cleaning up temporary files...');
                 }
+                // Status: cleaning
+                options.onStatus?.('cleaning');
                 if (fs.existsSync(zipPath)) {
                     await removePath(zipPath);
                 }
@@ -959,22 +985,25 @@ export default class BundleUpdater {
                     console.log('  Update installed successfully!');
                 }
 
+                // Status: success
+                options.onStatus?.('success');
                 // Success callback
                 options.updateSuccess?.();
 
-                // Restart if requested
-                if (options.restartAfterInstall) {
-                    const delay = options.restartDelay || 300;
+                // Notify that restart is needed
+                if (options.onNeedRestart) {
                     if (dev) {
-                        console.log(`  Restarting app in ${delay}ms...`);
+                        console.log('  Update installed successfully, calling onNeedRestart callback');
                     }
-                    setTimeout(() => {
-                        if (typeof nw !== 'undefined' && nw.App) {
-                            nw.App.quit();
-                        } else {
-                            process.exit(0);
-                        }
-                    }, delay);
+                    // Status: restart-needed
+                    options.onStatus?.('restart-needed');
+                    options.onNeedRestart();
+                } else {
+                    if (dev) {
+                        console.log('  Update installed successfully, restart required to apply changes');
+                    }
+                    // Status: restart-needed
+                    options.onStatus?.('restart-needed');
                 }
             } catch (error: any) {
                 if (dev) {
@@ -985,6 +1014,8 @@ export default class BundleUpdater {
                     await removePath(zipPath).catch(() => { });
                 }
                 const errorMessage = error.message || String(error);
+                // Status: error
+                options.onStatus?.('error');
                 options.updateFail?.(new Error(`Failed to install update: ${errorMessage}`));
             }
         } catch (error: any) {
@@ -992,6 +1023,8 @@ export default class BundleUpdater {
                 console.error('[nw-ota] Error in checkForUpdate:', error);
             }
             const errorMessage = error.message || String(error);
+            // Status: error
+            options.onStatus?.('error');
             options.updateFail?.(new Error(`Failed to check for updates: ${errorMessage}`));
         }
     }

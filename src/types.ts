@@ -25,73 +25,95 @@ export interface ProjectConfig {
 
 export type Platform = 'win' | 'mac' | 'linux32' | 'linux64';
 
+/**
+ * Status of the update process
+ */
+export type UpdateStatus =
+  | 'checking' // Checking for available updates
+  | 'update-found' // Update has been found and will be installed
+  | 'downloading' // Downloading the update package
+  | 'downloaded' // Download completed successfully
+  | 'unpacking' // Unpacking the downloaded archive
+  | 'unpacked' // Unpacking completed successfully
+  | 'replacing' // Replacing the current bundle with the new one
+  | 'replaced' // Bundle replacement completed successfully
+  | 'saving' // Saving the new version information
+  | 'cleaning' // Cleaning up temporary files
+  | 'success' // Update installation completed successfully
+  | 'error' // An error occurred during the update process
+  | 'no-update' // No updates available
+  | 'restart-needed'; // Update installed, application restart is required
+
 export interface CheckUpdateOptions {
   /**
    * S3 endpoint/base URL where updates are stored
    * Example: "https://bucket.s3.region.amazonaws.com" or "https://s3.example.com"
    */
   endpoint: string;
-  
+
   /**
    * Unique project key/name
    */
   projectKey: string;
-  
+
   /**
    * Current bundle version (will be compared with update versions)
    */
   currentVersion?: number;
-  
+
   /**
    * Enable detailed console logging for debugging
    * Default: false
    */
   dev?: boolean;
-  
+
   /**
    * Optional headers to include with the update request
    */
   headers?: Record<string, string>;
-  
+
   /**
    * Callback to track download progress
    * @param received - Number of bytes received
    * @param total - Total number of bytes to be downloaded
    */
   progress?(received: number, total: number): void;
-  
+
   /**
    * Callback triggered when update check completes and update is found
    * @param update - The update entry that will be installed
    */
   updateFound?(update: UpdateEntry): void;
-  
+
   /**
    * Callback triggered when the update succeeds
    */
   updateSuccess?(): void;
-  
+
   /**
    * Callback triggered when the update fails
    * @param message - Error message describing the failure
    */
   updateFail?(message?: string | Error): void;
-  
+
   /**
    * Callback triggered when no update is available
    */
   noUpdate?(): void;
-  
+
   /**
-   * Indicates whether the app should restart after installing the update
-   * Default: false
+   * Callback triggered after update is successfully installed
+   * This allows the user to handle restart manually (e.g., show a message to the user)
+   * The app will not restart automatically - user must restart manually to apply the update
    */
-  restartAfterInstall?: boolean;
-  
+  onNeedRestart?(): void;
+
   /**
-   * Delay in milliseconds before restarting the app after installing the update
-   * Default: 300ms
+   * Callback triggered on every status change during the update process
+   * This provides status information about what's happening at each stage
+   * Duplicates information from other callbacks but provides a unified status tracking
+   * @param status - Current status of the update process
    */
-  restartDelay?: number;
+  onStatus?(status: UpdateStatus): void;
 }
 
