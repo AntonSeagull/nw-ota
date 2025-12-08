@@ -3,9 +3,9 @@
 import axios from 'axios';
 
 import {
-    CheckUpdateOptions,
-    Platform,
-    UpdateEntry,
+  CheckUpdateOptions,
+  Platform,
+  UpdateEntry,
 } from './types.js';
 
 // Check if we're in Node.js/NW.js environment
@@ -162,11 +162,11 @@ export default class BundleUpdater {
     private versionFilePath: string;
     private dev: boolean;
 
-    constructor(options: BundleUpdaterOptions) {
+    constructor(options: BundleUpdaterOptions = {}) {
         const path = require("path");
 
         // If bundlePath is not provided, try to auto-detect it
-        if (!options.bundlePath) {
+        if (!options?.bundlePath) {
             const defaultPath = BundleUpdater.getDefaultBundlePath();
             if (!defaultPath) {
                 throw new Error('bundlePath is required. Could not auto-detect bundle path. Please provide bundlePath manually.');
@@ -176,9 +176,9 @@ export default class BundleUpdater {
             this.bundlePath = path.resolve(options.bundlePath);
         }
 
-        this.temporaryDirectory = options.temporaryDirectory || os.tmpdir();
-        this.backup = options.backup !== false;
-        this.dev = options.dev === true;
+        this.temporaryDirectory = options?.temporaryDirectory || os.tmpdir();
+        this.backup = options?.backup !== false;
+        this.dev = options?.dev === true;
 
         // Version file stored next to bundle path
         const bundleDir = path.dirname(this.bundlePath);
@@ -795,13 +795,31 @@ export default class BundleUpdater {
      * @returns Version info string with platform, application version, and OTA bundle version
      */
     getVersionInfo(): string {
+
+        let versionInfo = [];
         const platform = this._getNWJSPlatform();
         const appVersion = this._getAppVersion();
         const otaVersion = this.getCurrentVersion();
 
-        return `${platform} ${appVersion} ${otaVersion}`;
-    }
 
+        if (platform === 'win') {
+            versionInfo.push('Windows');
+        } else if (platform === 'mac') {
+            versionInfo.push('macOS');
+        } else if (platform === 'linux32') {
+            versionInfo.push('Linux (32-bit)');
+        } else if (platform === 'linux64') {
+            versionInfo.push('Linux (64-bit)');
+        }
+
+        versionInfo.push(appVersion);
+
+        if (otaVersion > 0) {
+            versionInfo.push(`(${otaVersion})`);
+        }
+
+        return versionInfo.join(' ');
+    }
 
     /**
      * Checks for updates and installs if available
