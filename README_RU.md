@@ -51,14 +51,10 @@ const updater = new BundleUpdater({});
 await updater.checkForUpdate({
   endpoint: "https://bucket.s3.region.amazonaws.com",
   projectKey: "my-project",
-  // currentVersion опционально - если не предоставлен, будет загружен из сохраненного файла версии
-  // После успешного обновления версия автоматически сохраняется
+  // currentVersion опционально - если не предоставлен, будет загружен из package.json ключа "ota"
+  // После успешного обновления версия автоматически сохраняется в package.json
 
   // Колбэки
-  progress: (received, total) => {
-    console.log(`Прогресс загрузки: ${received}/${total} байт`);
-  },
-
   updateFound: (update) => {
     console.log(`Обновление найдено: версия ${update.version}`);
   },
@@ -93,11 +89,11 @@ await updater.checkForUpdate({
 
 - Определяет платформу (win/mac/linux32/linux64) из NW.js
 - Получает **версию приложения** (например, "1.0.0") из `nw.App.manifest.version` - это версия из вашего package.json/manifest
-- Загружает текущую версию бандла из локального файла (`.nw-bundle-version.json`), если `currentVersion` не предоставлен
+- Загружает текущую версию OTA бандла из `package.json` ключа `"ota"`, если `currentVersion` не предоставлен (по умолчанию 0, если ключа нет)
 - Строит URL update.json: `{endpoint}/ota/nwjs/{projectKey}/{platform}/{appVersion}/update.json`
 - Находит последнее включенное обновление с версией > currentVersion
 - Загружает и устанавливает обновление
-- **Автоматически сохраняет новую версию** после успешной установки
+- **Автоматически сохраняет новую версию** в `package.json` ключ `"ota"` после успешной установки
 
 **Примечание:** `appVersion` в пути URL относится к версии приложения из `nw.App.manifest.version` (например, "1.0.0", "1.2.3"). Это позволяет иметь отдельные каналы обновлений для разных версий приложения.
 
@@ -314,6 +310,11 @@ if (defaultPath) {
 
 **Возвращает:** `Promise<void>`
 
+**Поведение в зависимости от платформы:**
+
+- **Windows**: Для директории `package.nw` удаляется только содержимое (директория сохраняется), затем в неё копируются новые файлы. Это предотвращает проблемы с заблокированными директориями на Windows.
+- **Другие платформы**: Вся директория бандла удаляется и создается заново.
+
 ### `updater.createBackup()`
 
 Создает резервную копию текущего бандла.
@@ -322,26 +323,57 @@ if (defaultPath) {
 
 ### `updater.getCurrentVersion()`
 
-Получает текущую версию бандла из сохраненного файла версии.
+Получает текущую версию бандла из `package.json`.
 
-**Возвращает:** `number` - Текущая версия бандла (0, если файл версии не существует)
+**Возвращает:** `number` - Текущая версия бандла (0, если ключ `"ota"` не существует в package.json)
 
-**Примечание:** Версия автоматически сохраняется после успешных обновлений через `checkForUpdate()`. Файл версии хранится в `.nw-bundle-version.json` рядом с директорией бандла.
+**Примечание:** Версия автоматически сохраняется после успешных обновлений через `checkForUpdate()`. Версия хранится в `package.json` в ключе `"ota"` в директории бандла.
+
+**Пример package.json:**
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "ota": 5
+}
+```
 
 ### `updater.getVersionInfo()`
 
 Получает строку информации о версии с платформой, версией приложения и версией OTA бандла.
 
-**Возвращает:** `string` - Информация о версии в формате: `"Platform Version OTAVersion"`
+**Возвращает:** `string` - Информация о версии в формате: `"Platform Version (OTAVersion)"`
 
 **Пример:**
 
 ```typescript
 const versionInfo = updater.getVersionInfo();
-console.log(versionInfo); // "win 1.0.0 5" or "mac 1.2.3 3"
+console.log(versionInfo); // "Windows 1.0.0 (5)" or "macOS 1.2.3 (3)"
 ```
 
 Это та же информация, которая используется при проверке обновлений (платформа, версия приложения и текущая версия OTA).
+
+### `BundleUpdater.getVersionInfo(bundlePath?)`
+
+Статический метод, который получает информацию о версии без создания экземпляра. Можно вызывать без конструктора.
+
+**Параметры:**
+
+- `bundlePath` (опционально): Путь к бандлу. Если не предоставлен, попытается автоматически определить с помощью `getDefaultBundlePath()`.
+
+**Возвращает:** `string` - Информация о версии в формате: `"Platform Version (OTAVersion)"`
+
+**Пример:**
+
+```typescript
+// Без конструктора
+const versionInfo = BundleUpdater.getVersionInfo();
+console.log(versionInfo); // "Windows 1.0.0 (5)"
+
+// Или с явным путем к бандлу
+const versionInfo = BundleUpdater.getVersionInfo("./app");
+```
 
 ### `updater.checkForUpdate(options)`
 
@@ -352,9 +384,8 @@ console.log(versionInfo); // "win 1.0.0 5" or "mac 1.2.3 3"
 - `options` (CheckUpdateOptions): Объект конфигурации
   - `endpoint` (string, обязательно): S3 endpoint/base URL, где хранятся обновления
   - `projectKey` (string, обязательно): Уникальный идентификатор проекта
-  - `currentVersion` (number, опционально): Текущая версия бандла. Если не предоставлена, будет загружена из сохраненного файла версии (`.nw-bundle-version.json`). По умолчанию 0, если сохраненная версия не существует.
+  - `currentVersion` (number, опционально): Текущая версия бандла. Если не предоставлена, будет загружена из `package.json` ключа `"ota"`. По умолчанию 0, если ключа не существует.
   - `headers` (Record<string, string>, опционально): Опциональные заголовки для запросов
-  - `progress` (функция, опционально): Колбэк для прогресса загрузки `(received: number, total: number) => void`
   - `updateFound` (функция, опционально): Колбэк, когда обновление найдено `(update: UpdateEntry) => void`
   - `updateSuccess` (функция, опционально): Колбэк, когда обновление успешно `() => void`
   - `updateFail` (функция, опционально): Колбэк, когда обновление не удалось `(error?: string | Error) => void`
@@ -387,12 +418,11 @@ console.log(versionInfo); // "win 1.0.0 5" or "mac 1.2.3 3"
 await updater.checkForUpdate({
   endpoint: "https://bucket.s3.region.amazonaws.com",
   projectKey: "my-project",
-  // currentVersion будет автоматически загружен из сохраненного файла
-  progress: (received, total) => {
-    console.log(`Прогресс: ${((received / total) * 100).toFixed(2)}%`);
-  },
+  // currentVersion будет автоматически загружен из package.json ключа "ota"
   updateSuccess: () => {
-    console.log("Обновление установлено! Версия автоматически сохранена.");
+    console.log(
+      "Обновление установлено! Версия автоматически сохранена в package.json."
+    );
   },
   onNeedRestart: () => {
     console.log(
@@ -435,6 +465,16 @@ npm run build
 - Для macOS/Linux: утилита unzip (обычно предустановлена)
 - Для публикации: AWS S3 или S3-совместимое хранилище
 - Для автоматических обновлений: контекст приложения NW.js (для метода `checkForUpdate`)
+
+### Необходимые зависимости в сборке NW.js
+
+При сборке вашего NW.js приложения следующие пакеты из `node_modules` должны быть включены в сборку:
+
+- `process-nextick-args`
+- `yauzl`
+- `yazl`
+
+Эти библиотеки требуются `nw-ota` для распаковки zip-файлов и используются во время выполнения в вашем NW.js приложении. Убедитесь, что эти пакеты включены в сборку при создании NW.js билда.
 
 ## Лицензия
 

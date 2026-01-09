@@ -55,10 +55,6 @@ await updater.checkForUpdate({
   // After successful update, version is automatically saved
 
   // Callbacks
-  progress: (received, total) => {
-    console.log(`Download progress: ${received}/${total} bytes`);
-  },
-
   updateFound: (update) => {
     console.log(`Update found: version ${update.version}`);
   },
@@ -91,11 +87,11 @@ The function automatically:
 
 - Detects platform (win/mac/linux32/linux64) from NW.js
 - Gets **application version** (e.g., "1.0.0") from `nw.App.manifest.version` - this is the version from your package.json/manifest
-- Loads current bundle version from local file (`.nw-bundle-version.json`) if `currentVersion` is not provided
+- Loads current OTA bundle version from `package.json` key `"ota"` if `currentVersion` is not provided (defaults to 0 if key doesn't exist)
 - Builds update.json URL: `{endpoint}/ota/nwjs/{projectKey}/{platform}/{appVersion}/update.json`
 - Finds the latest enabled update with version > currentVersion
 - Downloads and installs the update
-- **Saves the new version automatically** after successful installation
+- **Saves the new version automatically** to `package.json` key `"ota"` after successful installation
 
 **Note:** The `appVersion` in the URL path refers to the application version from `nw.App.manifest.version` (like "1.0.0", "1.2.3"). This allows you to have separate update channels for different application versions.
 
@@ -312,6 +308,11 @@ Replaces the current bundle with the new one.
 
 **Returns:** `Promise<void>`
 
+**Platform-specific behavior:**
+
+- **Windows**: For `package.nw` directory, only the contents are removed (directory is preserved), then new files are copied into it. This prevents issues with locked directories on Windows.
+- **Other platforms**: The entire bundle directory is removed and recreated.
+
 ### `updater.createBackup()`
 
 Creates a backup of the current bundle.
@@ -320,26 +321,57 @@ Creates a backup of the current bundle.
 
 ### `updater.getCurrentVersion()`
 
-Gets the current bundle version from the saved version file.
+Gets the current bundle version from `package.json`.
 
-**Returns:** `number` - Current bundle version (0 if no version file exists)
+**Returns:** `number` - Current bundle version (0 if `"ota"` key doesn't exist in package.json)
 
-**Note:** The version is automatically saved after successful updates via `checkForUpdate()`. The version file is stored at `.nw-bundle-version.json` next to the bundle directory.
+**Note:** The version is automatically saved after successful updates via `checkForUpdate()`. The version is stored in `package.json` in the `"ota"` key within the bundle directory.
+
+**Example package.json:**
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "ota": 5
+}
+```
 
 ### `updater.getVersionInfo()`
 
 Gets version info string with platform, application version, and OTA bundle version.
 
-**Returns:** `string` - Version info in format: `"Platform Version OTAVersion"`
+**Returns:** `string` - Version info in format: `"Platform Version (OTAVersion)"`
 
 **Example:**
 
 ```typescript
 const versionInfo = updater.getVersionInfo();
-console.log(versionInfo); // "win 1.0.0 5" or "mac 1.2.3 3"
+console.log(versionInfo); // "Windows 1.0.0 (5)" or "macOS 1.2.3 (3)"
 ```
 
 This is the same information that is used when checking for updates (platform, application version, and current OTA version).
+
+### `BundleUpdater.getVersionInfo(bundlePath?)`
+
+Static method that gets version info without creating an instance. Can be called without constructor.
+
+**Parameters:**
+
+- `bundlePath` (optional): Bundle path. If not provided, will try to auto-detect using `getDefaultBundlePath()`.
+
+**Returns:** `string` - Version info in format: `"Platform Version (OTAVersion)"`
+
+**Example:**
+
+```typescript
+// Without constructor
+const versionInfo = BundleUpdater.getVersionInfo();
+console.log(versionInfo); // "Windows 1.0.0 (5)"
+
+// Or with explicit bundle path
+const versionInfo = BundleUpdater.getVersionInfo("./app");
+```
 
 ### `updater.checkForUpdate(options)`
 
@@ -351,9 +383,8 @@ Checks for updates from S3 storage and installs them automatically. Works in NW.
 
   - `endpoint` (string, required): S3 endpoint/base URL where updates are stored
   - `projectKey` (string, required): Unique project identifier
-  - `currentVersion` (number, optional): Current bundle version. If not provided, will be loaded from saved version file (`.nw-bundle-version.json`). Defaults to 0 if no saved version exists.
+  - `currentVersion` (number, optional): Current bundle version. If not provided, will be loaded from `package.json` key `"ota"`. Defaults to 0 if key doesn't exist.
   - `headers` (Record<string, string>, optional): Optional headers for requests
-  - `progress` (function, optional): Callback for download progress `(received: number, total: number) => void`
   - `updateFound` (function, optional): Callback when update is found `(update: UpdateEntry) => void`
   - `updateSuccess` (function, optional): Callback when update succeeds `() => void`
   - `updateFail` (function, optional): Callback when update fails `(error?: string | Error) => void`
@@ -386,12 +417,11 @@ Checks for updates from S3 storage and installs them automatically. Works in NW.
 await updater.checkForUpdate({
   endpoint: "https://bucket.s3.region.amazonaws.com",
   projectKey: "my-project",
-  // currentVersion will be loaded automatically from saved file
-  progress: (received, total) => {
-    console.log(`Progress: ${((received / total) * 100).toFixed(2)}%`);
-  },
+  // currentVersion will be loaded automatically from package.json "ota" key
   updateSuccess: () => {
-    console.log("Update installed! Version saved automatically.");
+    console.log(
+      "Update installed! Version saved automatically to package.json."
+    );
   },
   onNeedRestart: () => {
     console.log("Please restart the app to apply the update.");
@@ -432,6 +462,16 @@ This is useful when:
 - For macOS/Linux: unzip utility (usually pre-installed)
 - For publishing: AWS S3 or S3-compatible storage
 - For automatic updates: NW.js application context (for `checkForUpdate` method)
+
+### Required Dependencies in NW.js Build
+
+When building your NW.js application, the following packages from `node_modules` must be included in your build:
+
+- `process-nextick-args`
+- `yauzl`
+- `yazl`
+
+These libraries are required by `nw-ota` for zip file extraction and are used at runtime in your NW.js application. Make sure these packages are bundled with your application when creating the NW.js build.
 
 ## License
 

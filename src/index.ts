@@ -13,10 +13,16 @@ if (typeof require === 'undefined') {
     throw new Error('require недоступен. Код должен выполняться в Node.js или NW.js окружении');
 }
 
+
+const safeRequire = (module: string) => {
+    // @ts-ignore
+    return window?.nw?.require?.(module);
+}
+
 // Load Node.js modules using require
-const child_process = require('child_process');
-const fs = require('fs');
-const os = require('os');
+const child_process = safeRequire('child_process');
+const fs = safeRequire('fs');
+const os = safeRequire('os');
 
 
 
@@ -103,11 +109,33 @@ async function removePath(targetPath: string, retries: number = 3, delay: number
 }
 
 /**
+ * Removes all contents of a directory but keeps the directory itself
+ */
+async function removeDirectoryContents(dirPath: string): Promise<void> {
+    if (!fs.existsSync(dirPath)) {
+        return;
+    }
+
+    const stat = await fs.promises.stat(dirPath);
+    if (!stat.isDirectory()) {
+        return;
+    }
+
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const path = safeRequire('path');
+
+    for (const entry of entries) {
+        const entryPath = path.join(dirPath, entry.name);
+        await removePath(entryPath);
+    }
+}
+
+/**
  * Recursively copies a directory from source to destination
  * Replacement for ncp library to avoid external dependencies
  */
 async function copyDirectory(source: string, destination: string): Promise<void> {
-    const path = require('path');
+    const path = safeRequire('path');
 
     // Create destination directory if it doesn't exist
     if (!fs.existsSync(destination)) {
@@ -148,22 +176,19 @@ export interface BundleUpdaterOptions {
     bundlePath?: string;
     temporaryDirectory?: string;
     backup?: boolean;
-    /**
-     * Enable detailed console logging for debugging
-     * Default: false
-     */
-    dev?: boolean;
+
 }
+
+const logProcessing = true;
 
 export default class BundleUpdater {
     private bundlePath: string;
     private temporaryDirectory: string;
     private backup: boolean;
-    private versionFilePath: string;
-    private dev: boolean;
+
 
     constructor(options: BundleUpdaterOptions = {}) {
-        const path = require("path");
+        const path = safeRequire("path");
 
         // If bundlePath is not provided, try to auto-detect it
         if (!options?.bundlePath) {
@@ -178,18 +203,12 @@ export default class BundleUpdater {
 
         this.temporaryDirectory = options?.temporaryDirectory || os.tmpdir();
         this.backup = options?.backup !== false;
-        this.dev = options?.dev === true;
 
-        // Version file stored next to bundle path
-        const bundleDir = path.dirname(this.bundlePath);
-        this.versionFilePath = path.join(bundleDir, '.nw-bundle-version.json');
-
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] BundleUpdater initialized:');
             console.log('  bundlePath:', this.bundlePath);
             console.log('  temporaryDirectory:', this.temporaryDirectory);
             console.log('  backup:', this.backup);
-            console.log('  versionFilePath:', this.versionFilePath);
         }
     }
 
@@ -197,89 +216,87 @@ export default class BundleUpdater {
      * Downloads a zip file from URL
      */
     async download(url: string): Promise<string> {
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] download() called');
             console.log('  URL:', url);
         }
-        const path = require("path");
+        const path = safeRequire("path");
+        const crypto = safeRequire("crypto");
 
-        const filename = decodeURIComponent(path.basename(url)) || 'bundle.zip';
+        // Generate unique filename to avoid conflicts
+        const uniqueId = crypto.randomBytes(16).toString('hex');
+        const extension = path.extname(url) || '.zip';
+        const filename = `bundle-${uniqueId}${extension}`;
         const destinationPath = path.resolve(this.temporaryDirectory, filename);
 
-        if (this.dev) {
+        if (logProcessing) {
             console.log('  Destination:', destinationPath);
             console.log('  Starting download...');
         }
 
-        const response = await axios({
-            method: 'get',
-            url: url,
-            responseType: 'stream',
-            timeout: 300000 // 5 minutes timeout
-        });
-
-        // Check if response.data is a stream
-        if (!response.data || typeof response.data.on !== 'function') {
-            if (this.dev) {
-                console.log('  Stream not available, using arraybuffer fallback');
-            }
-            // Fallback: download as arraybuffer
-            const arrayBufferResponse = await axios({
+        try {
+            // Simple download using arraybuffer - works on all platforms
+            const response = await axios({
                 method: 'get',
                 url: url,
                 responseType: 'arraybuffer',
-                timeout: 300000,
+                timeout: 300000, // 5 minutes timeout
             });
-            const buffer = Buffer.from(arrayBufferResponse.data);
+
+            const buffer = Buffer.from(response.data);
             fs.writeFileSync(destinationPath, buffer);
 
-            if (this.dev) {
-                console.log('  Download completed (arraybuffer):', buffer.length, 'bytes');
+            if (logProcessing) {
+                console.log('  Download completed:', buffer.length, 'bytes');
             }
+
             return destinationPath;
+        } catch (error) {
+            // Cleanup on error - remove incomplete file
+            if (fs.existsSync(destinationPath)) {
+                try {
+                    fs.unlinkSync(destinationPath);
+                    if (logProcessing) {
+                        console.log('  Cleaned up incomplete file:', destinationPath);
+                    }
+                } catch (cleanupError) {
+                    // Ignore cleanup errors
+                }
+            }
+            throw error;
         }
-
-        const writeStream = fs.createWriteStream(destinationPath);
-        await pipelinePromise(response.data, writeStream);
-
-        if (this.dev) {
-            const stats = fs.statSync(destinationPath);
-            console.log('  Download completed (stream):', stats.size, 'bytes');
-        }
-
-        return destinationPath;
     }
 
     /**
      * Unpacks a zip file to a temporary directory
      */
     async unpack(zipPath: string): Promise<string> {
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] unpack() called');
             console.log('  Zip path:', zipPath);
         }
 
-        const path = require("path");
-        const yauzl = require('yauzl');
+        const path = safeRequire("path");
+        const yauzl = safeRequire('yauzl');
         const destinationDirectory = path.join(
             this.temporaryDirectory,
             path.basename(zipPath, path.extname(zipPath))
         );
 
-        if (this.dev) {
+        if (logProcessing) {
             console.log('  Destination directory:', destinationDirectory);
         }
 
         // Remove destination if it exists
         if (fs.existsSync(destinationDirectory)) {
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('  Removing existing destination directory...');
             }
             await removePath(destinationDirectory);
         }
         fs.mkdirSync(destinationDirectory, { recursive: true });
 
-        if (this.dev) {
+        if (logProcessing) {
             console.log('  Starting unpack with yauzl...');
         }
 
@@ -328,7 +345,7 @@ export default class BundleUpdater {
 
                             writeStream.on('close', () => {
                                 extractedCount++;
-                                if (this.dev && extractedCount % 100 === 0) {
+                                if (logProcessing && extractedCount % 100 === 0) {
                                     console.log(`  Extracted ${extractedCount} files...`);
                                 }
                                 zipfile.readEntry();
@@ -342,7 +359,7 @@ export default class BundleUpdater {
                 });
 
                 zipfile.on('end', () => {
-                    if (this.dev) {
+                    if (logProcessing) {
                         console.log(`  Unpack completed: ${extractedCount} files extracted`);
                     }
                     resolve(destinationDirectory);
@@ -360,7 +377,7 @@ export default class BundleUpdater {
      */
     async createBackup(): Promise<string | null> {
         if (!fs.existsSync(this.bundlePath)) {
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('[nw-ota] createBackup() - bundle path does not exist, skipping');
             }
             return null;
@@ -368,7 +385,7 @@ export default class BundleUpdater {
 
         const backupPath = `${this.bundlePath}.backup.${Date.now()}`;
 
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] createBackup() called');
             console.log('  Bundle path:', this.bundlePath);
             console.log('  Backup path:', backupPath);
@@ -377,7 +394,7 @@ export default class BundleUpdater {
 
         await copyDirectory(this.bundlePath, backupPath);
 
-        if (this.dev) {
+        if (logProcessing) {
             console.log('  Backup created successfully');
         }
 
@@ -388,7 +405,7 @@ export default class BundleUpdater {
      * Replaces the current bundle with the new one
      */
     async replace(newBundlePath: string): Promise<void> {
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] replace() called');
             console.log('  New bundle path:', newBundlePath);
             console.log('  Current bundle path:', this.bundlePath);
@@ -399,42 +416,68 @@ export default class BundleUpdater {
         if (this.backup && fs.existsSync(this.bundlePath)) {
             backupPath = await this.createBackup();
         }
-        const path = require("path");
+        const path = safeRequire("path");
+
+        // Check if this is Windows and bundlePath is package.nw directory
+        const isWindows = /^win/.test(process.platform);
+        const normalizedBundlePath = path.normalize(this.bundlePath);
+        const bundleBasename = path.basename(normalizedBundlePath);
+        const isPackageNw = bundleBasename === 'package.nw';
+        const shouldPreserveDirectory = isWindows && isPackageNw && fs.existsSync(this.bundlePath);
+
         try {
-            // Remove old bundle
-            if (fs.existsSync(this.bundlePath)) {
-                if (this.dev) {
-                    console.log('  Removing old bundle...');
+            if (shouldPreserveDirectory) {
+                // On Windows, for package.nw directory, only remove contents, not the directory itself
+                if (logProcessing) {
+                    console.log('  Removing contents of package.nw directory (preserving directory)...');
                 }
-                await removePath(this.bundlePath);
+                await removeDirectoryContents(this.bundlePath);
+            } else {
+                // Remove old bundle (normal behavior for other cases)
+                if (fs.existsSync(this.bundlePath)) {
+                    if (logProcessing) {
+                        console.log('  Removing old bundle...');
+                    }
+                    await removePath(this.bundlePath);
+                }
+
+                // Ensure parent directory exists
+                const parentDir = path.dirname(this.bundlePath);
+                if (!fs.existsSync(parentDir)) {
+                    if (logProcessing) {
+                        console.log('  Creating parent directory:', parentDir);
+                    }
+                    fs.mkdirSync(parentDir, { recursive: true });
+                }
             }
 
-            // Ensure parent directory exists
-            const parentDir = path.dirname(this.bundlePath);
-            if (!fs.existsSync(parentDir)) {
-                if (this.dev) {
-                    console.log('  Creating parent directory:', parentDir);
-                }
-                fs.mkdirSync(parentDir, { recursive: true });
+            // Ensure bundle directory exists (in case it was removed or doesn't exist)
+            if (!fs.existsSync(this.bundlePath)) {
+                fs.mkdirSync(this.bundlePath, { recursive: true });
             }
 
             // Copy new bundle
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('  Copying new bundle...');
             }
             await copyDirectory(newBundlePath, this.bundlePath);
 
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('  Bundle replaced successfully');
             }
         } catch (error: any) {
             // Restore from backup if replacement failed
             if (backupPath && fs.existsSync(backupPath)) {
-                if (fs.existsSync(this.bundlePath)) {
-                    await removePath(this.bundlePath);
+                if (shouldPreserveDirectory) {
+                    // For package.nw, remove contents and restore
+                    await removeDirectoryContents(this.bundlePath);
+                    await copyDirectory(backupPath, this.bundlePath);
+                } else {
+                    if (fs.existsSync(this.bundlePath)) {
+                        await removePath(this.bundlePath);
+                    }
+                    await copyDirectory(backupPath, this.bundlePath);
                 }
-
-                await copyDirectory(backupPath, this.bundlePath);
                 throw new Error(
                     `Failed to replace bundle. Backup restored. Original error: ${error.message}`
                 );
@@ -447,7 +490,7 @@ export default class BundleUpdater {
      * Downloads, unpacks and replaces the bundle in one call
      */
     async update(url: string): Promise<void> {
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] update() called');
             console.log('  URL:', url);
         }
@@ -465,14 +508,14 @@ export default class BundleUpdater {
             // Find the actual bundle directory inside unpacked folder
             const bundleSource = this._findBundleSource(unpackedPath);
 
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('  Bundle source found:', bundleSource);
             }
 
             // Replace
             await this.replace(bundleSource);
 
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('  Update completed successfully');
             }
 
@@ -503,7 +546,7 @@ export default class BundleUpdater {
 
         // If there's only one entry and it's a directory, use that
         if (entries.length === 1) {
-            const path = require("path");
+            const path = safeRequire("path");
             const singleEntry = path.join(unpackedPath, entries[0]);
             const stat = fs.statSync(singleEntry);
             if (stat.isDirectory()) {
@@ -561,7 +604,7 @@ export default class BundleUpdater {
 
         const platform = process.platform;
         let appPath: string;
-        const path = require("path");
+        const path = safeRequire("path");
         if (/^win/.test(platform)) {
             // Windows: same directory as nw.exe
             appPath = path.dirname(process.execPath);
@@ -574,7 +617,7 @@ export default class BundleUpdater {
 
             let currentPath = process.execPath;
             const foundAppBundles: string[] = [];
-            const path = require("path");
+            const path = safeRequire("path");
             // Walk up the directory tree to find all .app bundles
             while (currentPath !== path.dirname(currentPath)) {
                 const dirName = path.basename(currentPath);
@@ -648,7 +691,7 @@ export default class BundleUpdater {
             }
         }
 
-        const path = require("path");
+        const path = safeRequire("path");
         // Fallback: try to read from package.json in bundle directory
         try {
             const packageJsonPath = path.join(this.bundlePath, 'package.json');
@@ -668,116 +711,111 @@ export default class BundleUpdater {
     }
 
     /**
-     * Downloads a file with progress tracking
+     * Downloads a file (simple method without progress tracking)
      */
-    private async _downloadWithProgress(
+    private async _downloadFile(
         url: string,
         destinationPath: string,
-        onProgress?: (received: number, total: number) => void,
         headers?: Record<string, string>
     ): Promise<void> {
-        const response = await axios({
-            method: 'get',
-            url: url,
-            responseType: 'stream',
-            timeout: 300000,
-            headers: headers,
-        });
-
-        // Check if response.data is a stream
-        if (!response.data || typeof response.data.on !== 'function') {
-            // Fallback: download as arraybuffer and write to file
-            const arrayBufferResponse = await axios({
+        try {
+            // Simple download using arraybuffer - works on all platforms
+            const response = await axios({
                 method: 'get',
                 url: url,
                 responseType: 'arraybuffer',
                 timeout: 300000,
                 headers: headers,
-                onDownloadProgress: (progressEvent) => {
-                    if (onProgress && progressEvent.total) {
-                        onProgress(progressEvent.loaded, progressEvent.total);
-                    }
-                },
             });
 
-            const buffer = Buffer.from(arrayBufferResponse.data);
+            const buffer = Buffer.from(response.data);
             fs.writeFileSync(destinationPath, buffer);
-            return;
-        }
-
-        const total = parseInt(response.headers['content-length'] || '0', 10);
-        let received = 0;
-
-        const writeStream = fs.createWriteStream(destinationPath);
-
-        response.data.on('data', (chunk: Buffer) => {
-            received += chunk.length;
-            if (onProgress && total > 0) {
-                onProgress(received, total);
+        } catch (error) {
+            // Cleanup on error - remove incomplete file
+            if (fs.existsSync(destinationPath)) {
+                try {
+                    fs.unlinkSync(destinationPath);
+                } catch (cleanupError) {
+                    // Ignore cleanup errors
+                }
             }
-        });
-
-        await pipelinePromise(response.data, writeStream);
+            throw error;
+        }
     }
 
     /**
-     * Gets the saved bundle version from local file
+     * Gets the saved bundle version from package.json
      */
     private _getSavedVersion(): number {
+        const path = safeRequire("path");
+        const packageJsonPath = path.join(this.bundlePath, 'package.json');
+
         try {
-            if (fs.existsSync(this.versionFilePath)) {
-                const content = fs.readFileSync(this.versionFilePath, 'utf-8');
-                const data = JSON.parse(content);
-                const version = typeof data.version === 'number' ? data.version : 0;
-                if (this.dev) {
-                    console.log('[nw-ota] _getSavedVersion() - loaded version:', version, 'from', this.versionFilePath);
+            if (fs.existsSync(packageJsonPath)) {
+                const content = fs.readFileSync(packageJsonPath, 'utf-8');
+                const packageJson = JSON.parse(content);
+
+                // Read OTA version from package.json
+                if (typeof packageJson.ota === 'number') {
+                    const version = packageJson.ota;
+                    if (logProcessing) {
+                        console.log('[nw-ota] _getSavedVersion() - loaded version:', version, 'from package.json');
+                    }
+                    return version;
                 }
-                return version;
             }
         } catch (error) {
-            if (this.dev) {
+            if (logProcessing) {
                 console.log('[nw-ota] _getSavedVersion() - error loading version:', error);
             }
             // Ignore errors, return 0 as default
         }
-        if (this.dev) {
-            console.log('[nw-ota] _getSavedVersion() - no version file found, returning 0');
+        if (logProcessing) {
+            console.log('[nw-ota] _getSavedVersion() - no OTA version found in package.json, returning 0');
         }
         return 0;
     }
 
     /**
-     * Saves the bundle version to local file
+     * Saves the bundle version to package.json
      */
     private _saveVersion(version: number): void {
-        if (this.dev) {
+        if (logProcessing) {
             console.log('[nw-ota] _saveVersion() called');
             console.log('  Version:', version);
-            console.log('  Version file path:', this.versionFilePath);
         }
 
-        try {
-            const data = {
-                version: version,
-                updatedAt: new Date().toISOString(),
-            };
-            const content = JSON.stringify(data, null, 2);
-            const path = require("path");
-            const dir = path.dirname(this.versionFilePath);
-            if (!fs.existsSync(dir)) {
-                if (this.dev) {
-                    console.log('  Creating directory:', dir);
-                }
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            fs.writeFileSync(this.versionFilePath, content, 'utf-8');
+        const path = safeRequire("path");
+        const packageJsonPath = path.join(this.bundlePath, 'package.json');
 
-            if (this.dev) {
-                console.log('  Version saved successfully');
+        try {
+            // Read existing package.json or create new one
+            let packageJson: any = {};
+            if (fs.existsSync(packageJsonPath)) {
+                try {
+                    const content = fs.readFileSync(packageJsonPath, 'utf-8');
+                    packageJson = JSON.parse(content);
+                } catch (parseError) {
+                    // If package.json is corrupted, start fresh
+                    if (logProcessing) {
+                        console.log('  Warning: package.json parse error, creating new structure');
+                    }
+                }
+            }
+
+            // Update or add OTA version
+            packageJson.ota = version;
+
+            // Write back to package.json with proper formatting
+            const content = JSON.stringify(packageJson, null, 2);
+            fs.writeFileSync(packageJsonPath, content, 'utf-8');
+
+            if (logProcessing) {
+                console.log('  Version saved successfully to package.json');
             }
         } catch (error) {
             // Log but don't throw - version saving is not critical
-            console.warn('[nw-ota] Failed to save bundle version:', error);
+            console.warn('[nw-ota] Failed to save bundle version to package.json:', error);
         }
     }
 
@@ -826,9 +864,8 @@ export default class BundleUpdater {
      * Works in NW.js context - automatically detects platform and application version
      */
     async checkForUpdate(options: CheckUpdateOptions): Promise<void> {
-        const dev = this.dev;
 
-        if (dev) {
+        if (logProcessing) {
             console.log('[nw-ota] checkForUpdate() called');
             console.log('  Endpoint:', options.endpoint);
             console.log('  Project key:', options.projectKey);
@@ -839,7 +876,7 @@ export default class BundleUpdater {
             const platform = this._getNWJSPlatform();
             const appVersion = this._getAppVersion();
 
-            if (dev) {
+            if (logProcessing) {
                 console.log('  Detected platform:', platform);
                 console.log('  Detected app version:', appVersion);
             }
@@ -849,14 +886,14 @@ export default class BundleUpdater {
                 ? options.currentVersion
                 : this._getSavedVersion();
 
-            if (dev) {
+            if (logProcessing) {
                 console.log('  Current OTA version:', currentVersion);
             }
 
             // Build update.json URL
             const updateJsonUrl = `${options.endpoint}/ota/nwjs/${options.projectKey}/${platform}/${appVersion}/update.json`;
 
-            if (dev) {
+            if (logProcessing) {
                 console.log('  Update.json URL:', updateJsonUrl);
                 console.log('  Fetching update.json...');
             }
@@ -873,13 +910,13 @@ export default class BundleUpdater {
                 });
                 updates = response.data;
 
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Update.json fetched successfully');
                     console.log('  Total updates found:', updates.length);
                 }
             } catch (error: any) {
                 if (error.response?.status === 404) {
-                    if (dev) {
+                    if (logProcessing) {
                         console.log('  Update.json not found (404)');
                     }
                     // No update.json found
@@ -887,7 +924,7 @@ export default class BundleUpdater {
                     options.noUpdate?.();
                     return;
                 }
-                if (dev) {
+                if (logProcessing) {
                     console.error('  Failed to fetch update.json:', error.message);
                 }
                 options.onStatus?.('error');
@@ -895,7 +932,7 @@ export default class BundleUpdater {
             }
 
             if (!Array.isArray(updates) || updates.length === 0) {
-                if (dev) {
+                if (logProcessing) {
                     console.log('  No updates in update.json');
                 }
                 options.onStatus?.('no-update');
@@ -908,7 +945,7 @@ export default class BundleUpdater {
                 .filter(update => update.enable && update.version > currentVersion)
                 .sort((a, b) => b.version - a.version); // Sort descending
 
-            if (dev) {
+            if (logProcessing) {
                 console.log('  Available updates (enabled, version > current):', availableUpdates.length);
                 if (availableUpdates.length > 0) {
                     console.log('  Latest update:', availableUpdates[0]);
@@ -916,7 +953,7 @@ export default class BundleUpdater {
             }
 
             if (availableUpdates.length === 0) {
-                if (dev) {
+                if (logProcessing) {
                     console.log('  No available updates');
                 }
                 options.onStatus?.('no-update');
@@ -927,7 +964,7 @@ export default class BundleUpdater {
             // Get the latest update
             const latestUpdate = availableUpdates[0];
 
-            if (dev) {
+            if (logProcessing) {
                 console.log('  Installing update version:', latestUpdate.version);
                 console.log('  Download URL:', latestUpdate.download);
             }
@@ -936,29 +973,32 @@ export default class BundleUpdater {
             options.onStatus?.('update-found');
             options.updateFound?.(latestUpdate);
 
-            const path = require("path");
-            // Download and install
-            const filename = decodeURIComponent(path.basename(latestUpdate.download)) || 'bundle.zip';
+            const path = safeRequire("path");
+            const crypto = safeRequire("crypto");
+
+            // Generate unique filename to avoid conflicts
+            const uniqueId = crypto.randomBytes(16).toString('hex');
+            const extension = path.extname(latestUpdate.download) || '.zip';
+            const filename = `bundle-${uniqueId}${extension}`;
             const zipPath = path.resolve(this.temporaryDirectory, filename);
 
             try {
-                // Download with progress
-                if (dev) {
+                // Download
+                if (logProcessing) {
                     console.log('  Starting download...');
                 }
                 // Status: downloading
                 options.onStatus?.('downloading');
-                await this._downloadWithProgress(
+                await this._downloadFile(
                     latestUpdate.download,
                     zipPath,
-                    options.progress,
                     options.headers
                 );
                 // Status: downloaded
                 options.onStatus?.('downloaded');
 
                 // Unpack
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Starting unpack...');
                 }
                 // Status: unpacking
@@ -970,12 +1010,12 @@ export default class BundleUpdater {
                 // Find bundle source
                 const bundleSource = this._findBundleSource(unpackedPath);
 
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Bundle source:', bundleSource);
                 }
 
                 // Replace bundle
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Replacing bundle...');
                 }
                 // Status: replacing
@@ -985,7 +1025,7 @@ export default class BundleUpdater {
                 options.onStatus?.('replaced');
 
                 // Save the new version
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Saving new version...');
                 }
                 // Status: saving
@@ -993,7 +1033,7 @@ export default class BundleUpdater {
                 this._saveVersion(latestUpdate.version);
 
                 // Cleanup
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Cleaning up temporary files...');
                 }
                 // Status: cleaning
@@ -1005,7 +1045,7 @@ export default class BundleUpdater {
                     await removePath(unpackedPath);
                 }
 
-                if (dev) {
+                if (logProcessing) {
                     console.log('  Update installed successfully!');
                 }
 
@@ -1016,21 +1056,21 @@ export default class BundleUpdater {
 
                 // Notify that restart is needed
                 if (options.onNeedRestart) {
-                    if (dev) {
+                    if (logProcessing) {
                         console.log('  Update installed successfully, calling onNeedRestart callback');
                     }
                     // Status: restart-needed
                     options.onStatus?.('restart-needed');
                     options.onNeedRestart();
                 } else {
-                    if (dev) {
+                    if (logProcessing) {
                         console.log('  Update installed successfully, restart required to apply changes');
                     }
                     // Status: restart-needed
                     options.onStatus?.('restart-needed');
                 }
             } catch (error: any) {
-                if (dev) {
+                if (logProcessing) {
                     console.error('  Error during update installation:', error);
                 }
                 // Cleanup on error
@@ -1043,7 +1083,7 @@ export default class BundleUpdater {
                 options.updateFail?.(new Error(`Failed to install update: ${errorMessage}`));
             }
         } catch (error: any) {
-            if (dev) {
+            if (logProcessing) {
                 console.error('[nw-ota] Error in checkForUpdate:', error);
             }
             const errorMessage = error.message || String(error);

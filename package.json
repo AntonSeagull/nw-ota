@@ -1,6 +1,6 @@
 {
     "name": "nw-ota",
-    "version": "1.0.0",
+    "version": "1.0.10",
     "description": "Update NW.js application bundle (app files) without replacing the entire application",
     "type": "module",
     "main": "dist/index.js",

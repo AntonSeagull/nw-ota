@@ -72,12 +72,7 @@ export interface CheckUpdateOptions {
    */
   headers?: Record<string, string>;
 
-  /**
-   * Callback to track download progress
-   * @param received - Number of bytes received
-   * @param total - Total number of bytes to be downloaded
-   */
-  progress?(received: number, total: number): void;
+
 
   /**
    * Callback triggered when update check completes and update is found
